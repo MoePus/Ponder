@@ -7,6 +7,7 @@ import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 import com.mojang.blaze3d.vertex.VertexFormat;
 
+import net.caffeinemc.mods.sodium.api.math.MatrixHelper;
 import net.caffeinemc.mods.sodium.api.util.ColorARGB;
 import net.caffeinemc.mods.sodium.api.util.ColorMixer;
 import net.caffeinemc.mods.sodium.api.util.NormI8;
@@ -141,57 +142,39 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			.normal();
 		normalMat.mul(localNormalTransforms);
 
-		Vector3f normal = this.normal;
+		Vector3f float3 = this.normal;
 		ShiftOutput shiftOutput = this.shiftOutput;
-		Vector3f lightDir0 = this.lightDir0;
-		Vector3f lightDir1 = this.lightDir1;
 
-		boolean applyDiffuse = !disableDiffuse && !ShadersModHelper.isShaderPackInUse();
 		boolean shaded = true;
 		int shadeSwapIndex = 0;
-		int nextShadeSwapVertex = shadeSwapIndex < shadeSwapVertices.length ? shadeSwapVertices[shadeSwapIndex] : -1;
-		int unshadedDiffuse = 255;
-		if (applyDiffuse) {
-			lightDir0.set(RenderSystemAccessor.catnip$getShaderLightDirections()[0]).normalize();
-			lightDir1.set(RenderSystemAccessor.catnip$getShaderLightDirections()[1]).normalize();
-			if (shadeSwapVertices.length > 0) {
-				// Pretend unshaded faces always point up to get the correct max diffuse value for the current level.
-				normal.set(0, invertFakeDiffuseNormal ? -1 : 1, 0);
-				// Don't apply the normal matrix since that would cause upside down objects to be dark.
-				unshadedDiffuse = (int) (255 * calculateDiffuse(normal, lightDir0, lightDir1));
-			}
-		}
+		int nextShadeSwapVertex = shadeSwapIndex < shadeSwapVertices.length ? shadeSwapVertices[shadeSwapIndex] : Integer.MAX_VALUE;
 
 		int vertexCount = template.vertexCount();
-		int quadCount = vertexCount / 4;
-		for (int i = 0; i < quadCount * 4; i += 4) {
+		for (int i = 0; i < vertexCount; i += 4) {
 			if (i >= nextShadeSwapVertex) {
 				shaded = !shaded;
 				shadeSwapIndex++;
-				nextShadeSwapVertex = shadeSwapIndex < shadeSwapVertices.length ? shadeSwapVertices[shadeSwapIndex] : -1;
+				nextShadeSwapVertex = shadeSwapIndex < shadeSwapVertices.length ? shadeSwapVertices[shadeSwapIndex] : Integer.MAX_VALUE;
 			}
 
 			int packedNormal = template.normal(i);
-			float normalX = ((byte) (packedNormal & 0xFF)) / 127.0f;
-			float normalY = ((byte) ((packedNormal >>> 8) & 0xFF)) / 127.0f;
-			float normalZ = ((byte) ((packedNormal >>> 16) & 0xFF)) / 127.0f;
-			normal.set(normalX, normalY, normalZ);
-			normal.mul(normalMat);
+			NormI8.unpack(packedNormal, float3);
+			int normal = NormI8.pack(float3.mul(normalMat));
 
 			pos4[0].set(template.x(i), template.y(i), template.z(i)).mulPosition(modelMat);
-			pos4[1].set(template.x(i + 1), template.y(i + 1), template.z(i + 1)).mulPosition(modelMat);
 			pos4[2].set(template.x(i + 2), template.y(i + 2), template.z(i + 2)).mulPosition(modelMat);
-			pos4[3].set(template.x(i + 3), template.y(i + 3), template.z(i + 3)).mulPosition(modelMat);
-
 			if (RenderSystem.getModelViewMatrix().m32() == 0) // do backface culling
 			{
-				Vector3f view = new Vector3f((pos4[0].x + pos4[2].x) * 0.5f, (pos4[0].y + pos4[2].y) * 0.5f, (pos4[0].z + pos4[2].z) * 0.5f).normalize();
-
-				if (view.dot(normal) > 0)
+				if (float3.x * (pos4[0].x + pos4[2].x) + float3.y * (pos4[0].y + pos4[2].y) + float3.z * (pos4[0].z + pos4[2].z) > 0)
 					continue;
 			}
+			pos4[1].set(template.x(i + 1), template.y(i + 1), template.z(i + 1)).mulPosition(modelMat);
+			pos4[3].set(template.x(i + 3), template.y(i + 3), template.z(i + 3)).mulPosition(modelMat);
 
-			int n = NormI8.pack(normal);
+			int packedTangent = template.tangent(i);
+			NormI8.unpack(packedTangent, float3);
+			int tangent = NormI8.pack(float3.mul(normalMat));
+
 			if (spriteShiftFunc != null) {
 				spriteShiftFunc.shift(template.u(i), template.v(i), shiftOutput);
 				uv4[0].set(shiftOutput.u, shiftOutput.v);
@@ -214,16 +197,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			float mid_u = (uv4[0].x + uv4[1].x + uv4[2].x + uv4[3].x) / 4;
 			float mid_v = (uv4[0].y + uv4[1].y + uv4[2].y + uv4[3].y) / 4;
 
-			int tangent = NormalHelper.computeTangent(null, normal.x(), normal.y(), normal.z(),
-				pos4[0].x, pos4[0].y, pos4[0].z, uv4[0].x, uv4[0].y,
-				pos4[1].x, pos4[1].y, pos4[1].z, uv4[1].x, uv4[1].y,
-				pos4[2].x, pos4[2].y, pos4[2].z, uv4[2].x, uv4[2].y);
-
 			int color = ColorMixer.mulComponentWise(template.color(i), this.vertex_color);
-			if (applyDiffuse) {
-				int factor = shaded ? (int) (255.0F * calculateDiffuse(normal, lightDir0, lightDir1)) : unshadedDiffuse;
-				color = ColorARGB.mulRGB(color, factor);
-			}
 
 			int light0 = hasCustomLight ? SuperByteBuffer.maxLight(template.light(i), packedLight) : template.light(i);
 			int light1 = hasCustomLight ? SuperByteBuffer.maxLight(template.light(i + 1), packedLight) : template.light(i + 1);
@@ -231,25 +205,26 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			int light3 = hasCustomLight ? SuperByteBuffer.maxLight(template.light(i + 3), packedLight) : template.light(i + 3);
 
 			if (useLevelLight) {
-				normal.set(((template.x(i) - .5f) * 15 / 16f) + .5f, (template.y(i) - .5f) * 15 / 16f + .5f, (template.z(i) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
-				light0 = SuperByteBuffer.maxLight(light0, getLight(levelWithLight, lightTransform == null ? normal : normal.mulPosition(lightTransform)));
-				normal.set(((template.x(i + 1) - .5f) * 15 / 16f) + .5f, (template.y(i + 1) - .5f) * 15 / 16f + .5f, (template.z(i + 1) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
-				light1 = SuperByteBuffer.maxLight(light1, getLight(levelWithLight, lightTransform == null ? normal : normal.mulPosition(lightTransform)));
-				normal.set(((template.x(i + 2) - .5f) * 15 / 16f) + .5f, (template.y(i + 2) - .5f) * 15 / 16f + .5f, (template.z(i + 2) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
-				light2 = SuperByteBuffer.maxLight(light2, getLight(levelWithLight, lightTransform == null ? normal : normal.mulPosition(lightTransform)));
-				normal.set(((template.x(i + 3) - .5f) * 15 / 16f) + .5f, (template.y(i + 3) - .5f) * 15 / 16f + .5f, (template.z(i + 3) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
-				light3 = SuperByteBuffer.maxLight(light3, getLight(levelWithLight, lightTransform == null ? normal : normal.mulPosition(lightTransform)));
+				float3.set(((template.x(i) - .5f) * 15 / 16f) + .5f, (template.y(i) - .5f) * 15 / 16f + .5f, (template.z(i) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
+				light0 = SuperByteBuffer.maxLight(light0, getLight(levelWithLight, lightTransform == null ? float3 : float3.mulPosition(lightTransform)));
+				float3.set(((template.x(i + 1) - .5f) * 15 / 16f) + .5f, (template.y(i + 1) - .5f) * 15 / 16f + .5f, (template.z(i + 1) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
+				light1 = SuperByteBuffer.maxLight(light1, getLight(levelWithLight, lightTransform == null ? float3 : float3.mulPosition(lightTransform)));
+				float3.set(((template.x(i + 2) - .5f) * 15 / 16f) + .5f, (template.y(i + 2) - .5f) * 15 / 16f + .5f, (template.z(i + 2) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
+				light2 = SuperByteBuffer.maxLight(light2, getLight(levelWithLight, lightTransform == null ? float3 : float3.mulPosition(lightTransform)));
+				float3.set(((template.x(i + 3) - .5f) * 15 / 16f) + .5f, (template.y(i + 3) - .5f) * 15 / 16f + .5f, (template.z(i + 3) - .5f) * 15 / 16f + .5f).mulPosition(localTransforms);
+				light3 = SuperByteBuffer.maxLight(light3, getLight(levelWithLight, lightTransform == null ? float3 : float3.mulPosition(lightTransform)));
 			}
-			TerrainVertex.write(BUFFER_PTR, pos4[0].x, pos4[0].y, pos4[0].z, color, uv4[0].x, uv4[0].y, mid_u, mid_v, light0, n, tangent);
+
+			TerrainVertex.write(BUFFER_PTR, pos4[0].x, pos4[0].y, pos4[0].z, color, uv4[0].x, uv4[0].y, mid_u, mid_v, light0, normal, tangent);
 			BUFFER_PTR += TerrainVertex.STRIDE;
 
-			TerrainVertex.write(BUFFER_PTR, pos4[1].x, pos4[1].y, pos4[1].z, color, uv4[1].x, uv4[1].y, mid_u, mid_v, light1, n, tangent);
+			TerrainVertex.write(BUFFER_PTR, pos4[1].x, pos4[1].y, pos4[1].z, color, uv4[1].x, uv4[1].y, mid_u, mid_v, light1, normal, tangent);
 			BUFFER_PTR += TerrainVertex.STRIDE;
 
-			TerrainVertex.write(BUFFER_PTR, pos4[2].x, pos4[2].y, pos4[2].z, color, uv4[2].x, uv4[2].y, mid_u, mid_v, light2, n, tangent);
+			TerrainVertex.write(BUFFER_PTR, pos4[2].x, pos4[2].y, pos4[2].z, color, uv4[2].x, uv4[2].y, mid_u, mid_v, light2, normal, tangent);
 			BUFFER_PTR += TerrainVertex.STRIDE;
 
-			TerrainVertex.write(BUFFER_PTR, pos4[3].x, pos4[3].y, pos4[3].z, color, uv4[3].x, uv4[3].y, mid_u, mid_v, light3, n, tangent);
+			TerrainVertex.write(BUFFER_PTR, pos4[3].x, pos4[3].y, pos4[3].z, color, uv4[3].x, uv4[3].y, mid_u, mid_v, light3, normal, tangent);
 			BUFFER_PTR += TerrainVertex.STRIDE;
 
 			BUFFED_VERTEX += 4;
@@ -279,7 +254,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 		Vector3f lightDir1 = this.lightDir1;
 		Vector4f lightPos = this.lightPos;
 
-		boolean applyDiffuse = !disableDiffuse && !ShadersModHelper.isShaderPackInUse();
+		boolean applyDiffuse = !disableDiffuse;
 		boolean shaded = true;
 		int shadeSwapIndex = 0;
 		int nextShadeSwapVertex = shadeSwapIndex < shadeSwapVertices.length ? shadeSwapVertices[shadeSwapIndex] : -1;
@@ -469,18 +444,17 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			WORLD_LIGHT_CACHE.clear();
 		}
 		if (builder instanceof BufferBuilder bb) {
-			VertexBufferWriter writer = VertexBufferWriter.tryOf(builder);
-			if (writer != null) {
-				if (bb.format == TerrainVertex.FORMAT) {
+			if (bb.format == TerrainVertex.FORMAT) {
+				VertexBufferWriter writer = VertexBufferWriter.tryOf(builder);
+				if (writer != null)
 					irisPathRenderInto(input, writer);
-				} else if (bb.format == BlockVertex.FORMAT) {
+			} else if (bb.format == BlockVertex.FORMAT) {
+				VertexBufferWriter writer = VertexBufferWriter.tryOf(builder);
+				if (writer != null)
 					sodiumPathRenderInto(input, writer);
-				} else {
-					defaultPathRenderInto(input, builder);
-				}
+			} else {
+				defaultPathRenderInto(input, builder);
 			}
-		} else {
-			defaultPathRenderInto(input, builder);
 		}
 		reset();
 	}

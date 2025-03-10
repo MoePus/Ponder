@@ -1,7 +1,7 @@
 package net.createmod.catnip.render;
 
 public class TemplateMesh {
-	public static final int INT_STRIDE = 9;
+	public static final int INT_STRIDE = 10;
 	public static final int BYTE_STRIDE = INT_STRIDE * Integer.BYTES;
 
 	public static final int X_OFFSET = 0;
@@ -13,6 +13,7 @@ public class TemplateMesh {
 	public static final int OVERLAY_OFFSET = 6;
 	public static final int LIGHT_OFFSET = 7;
 	public static final int NORMAL_OFFSET = 8;
+	public static final int TANGENT_OFFSET = 9;
 
 	protected final int[] data;
 	protected final int vertexCount;
@@ -66,6 +67,10 @@ public class TemplateMesh {
 
 	public int normal(int index) {
 		return data[index * INT_STRIDE + NORMAL_OFFSET];
+	}
+
+	public int tangent(int index) {
+		return data[index * INT_STRIDE + TANGENT_OFFSET];
 	}
 
 	public int vertexCount() {
