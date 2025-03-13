@@ -160,6 +160,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			int packedNormal = template.normal(i);
 			NormI8.unpack(packedNormal, float3);
 			int normal = NormI8.pack(float3.mul(normalMat));
+			float nx = float3.x, ny = float3.y, nz = float3.z;
 
 			pos4[0].set(template.x(i), template.y(i), template.z(i)).mulPosition(modelMat);
 			pos4[2].set(template.x(i + 2), template.y(i + 2), template.z(i + 2)).mulPosition(modelMat);
@@ -171,9 +172,10 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			pos4[1].set(template.x(i + 1), template.y(i + 1), template.z(i + 1)).mulPosition(modelMat);
 			pos4[3].set(template.x(i + 3), template.y(i + 3), template.z(i + 3)).mulPosition(modelMat);
 
-			int packedTangent = template.tangent(i);
-			NormI8.unpack(packedTangent, float3);
-			int tangent = NormI8.pack(float3.mul(normalMat));
+			int tangent = NormalHelper.computeTangent(null, nx, ny, nz,
+				pos4[0].x, pos4[0].y, pos4[0].z, uv4[0].x, uv4[0].y,
+				pos4[1].x, pos4[1].y, pos4[1].z, uv4[1].x, uv4[1].y,
+				pos4[2].x, pos4[2].y, pos4[2].z, uv4[2].x, uv4[2].y);
 
 			if (spriteShiftFunc != null) {
 				spriteShiftFunc.shift(template.u(i), template.v(i), shiftOutput);
