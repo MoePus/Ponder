@@ -33,6 +33,10 @@ subprojects {
         maven { url = "https://mvn.devos.one/releases/" }
         maven { url = "https://maven.createmod.net" }
         maven { url = "https://jitpack.io" }
+        maven { // embeddium
+            url = "https://maven.blamejared.com"
+        }
+        maven { url = "https://api.modrinth.com/maven" }
     }
 
     processResources {

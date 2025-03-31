@@ -98,6 +98,9 @@ dependencies {
     runtimeOnly(fg.deobf("dev.engine-room.flywheel:flywheel-forge-${minecraft_version}:${flywheel_version}"))
 
     annotationProcessor("org.spongepowered:mixin:0.8.5-SNAPSHOT:processor")
+
+    compileOnly("org.embeddedt:embeddium-${minecraft_version}:${embeddium_version}+mc${minecraft_version}")
+    compileOnly("maven.modrinth:oculus:${minecraft_version}-${oculus_version}")
 }
 
 tasks.withType(JavaCompile).configureEach {
