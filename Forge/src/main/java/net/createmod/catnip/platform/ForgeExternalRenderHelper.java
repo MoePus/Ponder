@@ -373,6 +373,6 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 			}
 		}
 
-		return true;
+		return false;
 	}
 }
