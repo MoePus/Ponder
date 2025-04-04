@@ -366,10 +366,10 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 			VertexFormatDescription format = VertexFormatRegistry.instance().get(bb.format);
 			if (format == IrisTerrainVertex.FORMAT || format == IrisEntityVertex.FORMAT) {
 				IrisRenderInto(byteBuffer, input, writer, format);
+				return true;
 			} else if (format == BlockVertex.FORMAT || format == EntityVertex.FORMAT) {
 				SodiumRenderInto(byteBuffer, input, writer, format);
-			} else {
-				return false;
+				return true;
 			}
 		}
 

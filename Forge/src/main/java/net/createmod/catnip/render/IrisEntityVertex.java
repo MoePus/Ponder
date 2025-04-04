@@ -12,7 +12,7 @@ import org.lwjgl.system.MemoryUtil;
 
 public class IrisEntityVertex {
 	public static final VertexFormatDescription FORMAT;
-	public static final int STRIDE = 54;
+	public static final int STRIDE = 56;
 
 	public IrisEntityVertex() {
 	}
