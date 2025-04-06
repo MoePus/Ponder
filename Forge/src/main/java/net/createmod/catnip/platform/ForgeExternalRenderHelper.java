@@ -136,7 +136,13 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 			float mid_u = (uv0.x + uv1.x + uv2.x + uv3.x) / 4;
 			float mid_v = (uv0.y + uv1.y + uv2.y + uv3.y) / 4;
 
-			int color = template.color(i);
+			int quadColor = template.color(i);
+			int vertexColor = byteBuffer.getVertexColor();
+			int r = ((((quadColor) & 0xFF) * ((vertexColor) & 0xFF)) + 0xFF) >>> 8;
+			int g = ((((quadColor >>> 8) & 0xFF) * ((vertexColor >>> 8) & 0xFF)) + 0xFF) >>> 8;
+			int b = ((((quadColor >>> 16) & 0xFF) * ((vertexColor >>> 16) & 0xFF)) + 0xFF) >>> 8;
+			int a = ((((quadColor >>> 24) & 0xFF) * ((vertexColor >>> 24) & 0xFF)) + 0xFF) >>> 8;
+			int color = (a << 24) | (b << 16) | (g << 8) | r;
 
 			int light0 = template.light(i);
 			int light1 = template.light(i + 1);
@@ -280,18 +286,19 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 			}
 
 			int quadColor = template.color(i);
-			int r = quadColor & 0xFF;
-			int g = (quadColor >>> 8) & 0xFF;
-			int b = (quadColor >>> 16) & 0xFF;
-			int a = (quadColor >>> 24) & 0xFF;
+			int vertexColor = byteBuffer.getVertexColor();
+			int r = ((((quadColor) & 0xFF) * ((vertexColor) & 0xFF)) + 0xFF) >>> 8;
+			int g = ((((quadColor >>> 8) & 0xFF) * ((vertexColor >>> 8) & 0xFF)) + 0xFF) >>> 8;
+			int b = ((((quadColor >>> 16) & 0xFF) * ((vertexColor >>> 16) & 0xFF)) + 0xFF) >>> 8;
+			int a = ((((quadColor >>> 24) & 0xFF) * ((vertexColor >>> 24) & 0xFF)) + 0xFF) >>> 8;
 			if (applyDiffuse) {
 				float3.set(nx, ny, nz);
 				int factor = shaded ? (int) (255.0F * ShadeSeparatingSuperByteBuffer.calculateDiffuse(float3, lightDir0, lightDir1)) : unshadedDiffuse;
-				r = (r * factor + 255) >>> 3;
-				g = (g * factor + 255) >>> 3;
-				b = (b * factor + 255) >>> 3;
+				r = (r * factor + 255) >>> 8;
+				g = (g * factor + 255) >>> 8;
+				b = (b * factor + 255) >>> 8;
 			}
-			int color = (a << 24) | (r << 16) | (g << 8) | b;
+			int color = (a << 24) | (b << 16) | (g << 8) | r;
 
 			int light0 = template.light(i);
 			int light1 = template.light(i + 1);

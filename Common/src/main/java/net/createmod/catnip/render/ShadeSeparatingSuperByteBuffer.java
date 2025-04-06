@@ -41,7 +41,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 	private final PoseStack transforms = new PoseStack();
 
 	// Vertex Coloring
-	private float r, g, b, a;
+	private int vertexColor; // aabbggrr
 	private boolean disableDiffuse;
 
 	// Vertex Texture Coords
@@ -105,7 +105,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 		boolean shaded = true;
 		int shadeSwapIndex = 0;
 		int nextShadeSwapVertex = shadeSwapIndex < shadeSwapVertices.length ? shadeSwapVertices[shadeSwapIndex] : -1;
-		float unshadedDiffuse = 1;
+		int unshadedDiffuse = 255;
 		if (applyDiffuse) {
 			lightDir0.set(RenderSystemAccessor.catnip$getShaderLightDirections()[0]).normalize();
 			lightDir1.set(RenderSystemAccessor.catnip$getShaderLightDirections()[1]).normalize();
@@ -113,7 +113,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 				// Pretend unshaded faces always point up to get the correct max diffuse value for the current level.
 				normal.set(0, 1, 0);
 				// Don't apply the normal matrix since that would cause upside down objects to be dark.
-				unshadedDiffuse = calculateDiffuse(normal, lightDir0, lightDir1);
+				unshadedDiffuse = (int) (255 * calculateDiffuse(normal, lightDir0, lightDir1));
 			}
 		}
 
@@ -138,17 +138,18 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			normal.set(normalX, normalY, normalZ);
 			normal.mul(normalMat);
 
-			int color = template.color(i);
-			float r = (color & 0xFF) / 255.0f * this.r;
-			float g = ((color >>> 8) & 0xFF) / 255.0f * this.g;
-			float b = ((color >>> 16) & 0xFF) / 255.0f * this.b;
-			float a = ((color >>> 24) & 0xFF) / 255.0f * this.a;
+			int quadColor = template.color(i);
+			int r = ((((quadColor) & 0xFF) * ((vertexColor) & 0xFF)) + 0xFF) >>> 8;
+			int g = ((((quadColor >>> 8) & 0xFF) * ((vertexColor >>> 8) & 0xFF)) + 0xFF) >>> 8;
+			int b = ((((quadColor >>> 16) & 0xFF) * ((vertexColor >>> 16) & 0xFF)) + 0xFF) >>> 8;
+			int a = ((((quadColor >>> 24) & 0xFF) * ((vertexColor >>> 24) & 0xFF)) + 0xFF) >>> 8;
 			if (applyDiffuse) {
-				float diffuse = shaded ? calculateDiffuse(normal, lightDir0, lightDir1) : unshadedDiffuse;
-				r *= diffuse;
-				g *= diffuse;
-				b *= diffuse;
+				int factor = shaded ? (int) (255.0F * calculateDiffuse(normal, lightDir0, lightDir1)) : unshadedDiffuse;
+				r = (r * factor + 255) >>> 8;
+				g = (g * factor + 255) >>> 8;
+				b = (b * factor + 255) >>> 8;
 			}
+			int color = (a << 24) | (r << 16) | (g << 8) | b;
 
 			float u = template.u(i);
 			float v = template.v(i);
@@ -174,7 +175,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 				light = SuperByteBuffer.maxLight(light, getLight(lightPos));
 			}
 
-			builder.vertex(pos.x(), pos.y(), pos.z(), r, g, b, a, u, v, overlay, light, normal.x(), normal.y(), normal.z());
+			builder.vertex(pos.x, pos.y, pos.z).color(color).uv(u, v).overlayCoords(overlay).uv2(light).normal(normal.x, normal.y, normal.z).endVertex();;
 		}
 	}
 
@@ -197,10 +198,7 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 			transforms.popPose();
 		transforms.pushPose();
 
-		r = 1;
-		g = 1;
-		b = 1;
-		a = 1;
+		vertexColor = 0xffffffff;
 		disableDiffuse = false;
 		spriteShiftFunc = null;
 		hasCustomOverlay = false;
@@ -225,11 +223,15 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 		return disableDiffuse;
 	}
 
+	public int getVertexColor() {
+		return vertexColor;
+	}
+
 	public TemplateMesh getTemplateMesh() {
 		return template;
 	}
 
-	public int[] getShadeSwapVertices(){
+	public int[] getShadeSwapVertices() {
 		return shadeSwapVertices;
 	}
 
@@ -306,20 +308,17 @@ public class ShadeSeparatingSuperByteBuffer implements SuperByteBuffer {
 	}
 
 	public SuperByteBuffer color(float r, float g, float b, float a) {
-		this.r = r;
-		this.g = g;
-		this.b = b;
-		this.a = a;
+		color((int) (r * 255.0f), (int) (g * 255.0f), (int) (b * 255.0f), (int) (a * 255.0f));
 		return this;
 	}
 
 	public SuperByteBuffer color(int r, int g, int b, int a) {
-		color(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
+		this.vertexColor = (a & 0xff) << 24 | (b & 0xff) << 16 | (g & 0xff) << 8 | (r & 0xff);
 		return this;
 	}
 
 	public SuperByteBuffer color(int color) {
-		color((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, 255);
+		this.vertexColor = 0xff000000 | ((color & 0xFF) << 16) | ((color & 0xFF00)) | ((color & 0xFF0000) >>> 16);
 		return this;
 	}
 
