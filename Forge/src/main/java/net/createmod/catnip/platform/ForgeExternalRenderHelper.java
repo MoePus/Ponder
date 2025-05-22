@@ -23,6 +23,7 @@ import net.createmod.catnip.render.SuperByteBuffer;
 import net.createmod.catnip.render.TemplateMesh;
 import net.createmod.ponder.mixin.client.accessor.RenderSystemAccessor;
 
+import net.irisshaders.iris.shadows.ShadowRenderer;
 import net.irisshaders.iris.vertices.NormalHelper;
 
 import org.joml.Matrix3f;
@@ -31,6 +32,8 @@ import org.joml.Vector2f;
 import org.joml.Vector3f;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.system.MemoryUtil;
+
+import static net.createmod.catnip.render.ShadeSeparatingSuperByteBuffer.calculateDiffuse;
 
 public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 	private static final int BUFFER_VERTEX_COUNT = 48;
@@ -74,6 +77,112 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 
 	private static boolean isPerspectiveProjection() {
 		return RenderSystem.getModelViewMatrix().m32() == 0;
+	}
+
+	private static int calcColorSodium(int quadColor, int vertexColor, int unshadedDiffuse, boolean applyDiffuse, boolean shaded, float nx, float ny, float nz) {
+		int r = ((((quadColor) & 0xFF) * ((vertexColor) & 0xFF)) + 0xFF) >>> 8;
+		int g = ((((quadColor >>> 8) & 0xFF) * ((vertexColor >>> 8) & 0xFF)) + 0xFF) >>> 8;
+		int b = ((((quadColor >>> 16) & 0xFF) * ((vertexColor >>> 16) & 0xFF)) + 0xFF) >>> 8;
+		int a = ((((quadColor >>> 24) & 0xFF) * ((vertexColor >>> 24) & 0xFF)) + 0xFF) >>> 8;
+		if (applyDiffuse) {
+			float3.set(nx, ny, nz);
+			int factor = shaded ? (int) (255.0F * calculateDiffuse(float3, lightDir0, lightDir1)):unshadedDiffuse;
+			r = (r * factor + 255) >>> 8;
+			g = (g * factor + 255) >>> 8;
+			b = (b * factor + 255) >>> 8;
+		}
+		return (a << 24) | (b << 16) | (g << 8) | r;
+	}
+
+	private static int calcColorIris(int quadColor, int vertexColor) {
+		int r = ((((quadColor) & 0xFF) * ((vertexColor) & 0xFF)) + 0xFF) >>> 8;
+		int g = ((((quadColor >>> 8) & 0xFF) * ((vertexColor >>> 8) & 0xFF)) + 0xFF) >>> 8;
+		int b = ((((quadColor >>> 16) & 0xFF) * ((vertexColor >>> 16) & 0xFF)) + 0xFF) >>> 8;
+		int a = ((((quadColor >>> 24) & 0xFF) * ((vertexColor >>> 24) & 0xFF)) + 0xFF) >>> 8;
+		return (a << 24) | (b << 16) | (g << 8) | r;
+	}
+
+	private static void IrisRenderShadowInto(ShadeSeparatingSuperByteBuffer byteBuffer, PoseStack input, VertexBufferWriter writer, VertexFormatDescription format) {
+		PoseStack transforms = byteBuffer.getTransforms();
+		modelMat.set(input.last().pose());
+		Matrix4f localTransforms = transforms.last().pose();
+		modelMat.mul(localTransforms);
+
+		PoseStack.Pose pose = input.poseStack.peekFirst();
+		Matrix3f sunNormal = pose.normal();
+		float3.set(sunNormal.m02, sunNormal.m12, sunNormal.m22); // lightDirection
+
+		SuperByteBuffer.SpriteShiftFunc spriteShiftFunc = byteBuffer.getSpriteShiftFunc();
+		boolean isTerrain = (format == IrisTerrainVertex.FORMAT);
+
+		TemplateMesh template = byteBuffer.getTemplateMesh();
+		int vertexCount = template.vertexCount();
+		for (int i = 0; i < vertexCount; i += 4) {
+			int packedNormal = template.normal(i);
+			float unpackedX = NormI8.unpackX(packedNormal);
+			float unpackedY = NormI8.unpackY(packedNormal);
+			float unpackedZ = NormI8.unpackZ(packedNormal);
+			float nx = MatrixHelper.transformNormalX(normalMat, unpackedX, unpackedY, unpackedZ);
+			float ny = MatrixHelper.transformNormalY(normalMat, unpackedX, unpackedY, unpackedZ);
+			float nz = MatrixHelper.transformNormalZ(normalMat, unpackedX, unpackedY, unpackedZ);
+
+			if (float3.dot(nx, ny, nz) >= 0) continue; // backface culling
+			pos0.set(template.x(i), template.y(i), template.z(i)).mulPosition(modelMat);
+			pos1.set(template.x(i + 1), template.y(i + 1), template.z(i + 1)).mulPosition(modelMat);
+			pos2.set(template.x(i + 2), template.y(i + 2), template.z(i + 2)).mulPosition(modelMat);
+			pos3.set(template.x(i + 3), template.y(i + 3), template.z(i + 3)).mulPosition(modelMat);
+
+			int normal = NormI8.pack(nx, ny, nz);
+
+			if (spriteShiftFunc != null) {
+				spriteShiftFunc.shift(template.u(i), template.v(i), shiftOutput);
+				uv0.set(shiftOutput.u, shiftOutput.v);
+
+				spriteShiftFunc.shift(template.u(i + 1), template.v(i + 1), shiftOutput);
+				uv1.set(shiftOutput.u, shiftOutput.v);
+
+				spriteShiftFunc.shift(template.u(i + 2), template.v(i + 2), shiftOutput);
+				uv2.set(shiftOutput.u, shiftOutput.v);
+
+				spriteShiftFunc.shift(template.u(i + 3), template.v(i + 3), shiftOutput);
+				uv3.set(shiftOutput.u, shiftOutput.v);
+			} else {
+				uv0.set(template.u(i), template.v(i));
+				uv1.set(template.u(i + 1), template.v(i + 1));
+				uv2.set(template.u(i + 2), template.v(i + 2));
+				uv3.set(template.u(i + 3), template.v(i + 3));
+			}
+
+			if (isTerrain) { // IrisTerrainVertex.FORMAT
+				IrisTerrainVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, 0xffffffff, uv0.x, uv0.y, 0.5f, 0.5f, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisTerrainVertex.STRIDE;
+
+				IrisTerrainVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, 0xffffffff, uv1.x, uv1.y, 0.5f, 0.5f, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisTerrainVertex.STRIDE;
+
+				IrisTerrainVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, 0xffffffff, uv2.x, uv2.y, 0.5f, 0.5f, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisTerrainVertex.STRIDE;
+
+				IrisTerrainVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, 0xffffffff, uv3.x, uv3.y, 0.5f, 0.5f, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisTerrainVertex.STRIDE;
+			} else { // IrisEntityVertex.FORMAT
+				IrisEntityVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, 0xffffffff, uv0.x, uv0.y, 0.5f, 0.5f, 0xffffffff, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisEntityVertex.STRIDE;
+
+				IrisEntityVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, 0xffffffff, uv1.x, uv1.y, 0.5f, 0.5f, 0xffffffff, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisEntityVertex.STRIDE;
+
+				IrisEntityVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, 0xffffffff, uv2.x, uv2.y, 0.5f, 0.5f, 0xffffffff, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisEntityVertex.STRIDE;
+
+				IrisEntityVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, 0xffffffff, uv3.x, uv3.y, 0.5f, 0.5f, 0xffffffff, 0xf000f0, normal, 0xffffffff);
+				BUFFER_PTR += IrisEntityVertex.STRIDE;
+			}
+			BUFFED_VERTEX += 4;
+			flush(writer, false, format);
+		}
+
+		flush(writer, true, format);
 	}
 
 	private static void IrisRenderInto(ShadeSeparatingSuperByteBuffer byteBuffer, PoseStack input, VertexBufferWriter writer, VertexFormatDescription format) {
@@ -136,13 +245,11 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 			float mid_u = (uv0.x + uv1.x + uv2.x + uv3.x) / 4;
 			float mid_v = (uv0.y + uv1.y + uv2.y + uv3.y) / 4;
 
-			int quadColor = template.color(i);
 			int vertexColor = byteBuffer.getVertexColor();
-			int r = ((((quadColor) & 0xFF) * ((vertexColor) & 0xFF)) + 0xFF) >>> 8;
-			int g = ((((quadColor >>> 8) & 0xFF) * ((vertexColor >>> 8) & 0xFF)) + 0xFF) >>> 8;
-			int b = ((((quadColor >>> 16) & 0xFF) * ((vertexColor >>> 16) & 0xFF)) + 0xFF) >>> 8;
-			int a = ((((quadColor >>> 24) & 0xFF) * ((vertexColor >>> 24) & 0xFF)) + 0xFF) >>> 8;
-			int color = (a << 24) | (b << 16) | (g << 8) | r;
+			int color0 = calcColorIris(template.color(i), vertexColor);
+			int color1 = calcColorIris(template.color(i + 1), vertexColor);
+			int color2 = calcColorIris(template.color(i + 2), vertexColor);
+			int color3 = calcColorIris(template.color(i + 3), vertexColor);
 
 			int light0 = template.light(i);
 			int light1 = template.light(i + 1);
@@ -168,16 +275,16 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 			}
 
 			if (isTerrain) { // IrisTerrainVertex.FORMAT
-				IrisTerrainVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color, uv0.x, uv0.y, mid_u, mid_v, light0, normal, tangent);
+				IrisTerrainVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color0, uv0.x, uv0.y, mid_u, mid_v, light0, normal, tangent);
 				BUFFER_PTR += IrisTerrainVertex.STRIDE;
 
-				IrisTerrainVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color, uv1.x, uv1.y, mid_u, mid_v, light1, normal, tangent);
+				IrisTerrainVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color1, uv1.x, uv1.y, mid_u, mid_v, light1, normal, tangent);
 				BUFFER_PTR += IrisTerrainVertex.STRIDE;
 
-				IrisTerrainVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color, uv2.x, uv2.y, mid_u, mid_v, light2, normal, tangent);
+				IrisTerrainVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color2, uv2.x, uv2.y, mid_u, mid_v, light2, normal, tangent);
 				BUFFER_PTR += IrisTerrainVertex.STRIDE;
 
-				IrisTerrainVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color, uv3.x, uv3.y, mid_u, mid_v, light3, normal, tangent);
+				IrisTerrainVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color3, uv3.x, uv3.y, mid_u, mid_v, light3, normal, tangent);
 				BUFFER_PTR += IrisTerrainVertex.STRIDE;
 			} else { // IrisEntityVertex.FORMAT
 				int overlay0, overlay1, overlay2, overlay3;
@@ -189,16 +296,16 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 					overlay2 = template.overlay(i + 2);
 					overlay3 = template.overlay(i + 3);
 				}
-				IrisEntityVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color, uv0.x, uv0.y, mid_u, mid_v, overlay0, light0, normal, tangent);
+				IrisEntityVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color0, uv0.x, uv0.y, mid_u, mid_v, overlay0, light0, normal, tangent);
 				BUFFER_PTR += IrisEntityVertex.STRIDE;
 
-				IrisEntityVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color, uv1.x, uv1.y, mid_u, mid_v, overlay1, light1, normal, tangent);
+				IrisEntityVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color1, uv1.x, uv1.y, mid_u, mid_v, overlay1, light1, normal, tangent);
 				BUFFER_PTR += IrisEntityVertex.STRIDE;
 
-				IrisEntityVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color, uv2.x, uv2.y, mid_u, mid_v, overlay2, light2, normal, tangent);
+				IrisEntityVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color2, uv2.x, uv2.y, mid_u, mid_v, overlay2, light2, normal, tangent);
 				BUFFER_PTR += IrisEntityVertex.STRIDE;
 
-				IrisEntityVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color, uv3.x, uv3.y, mid_u, mid_v, overlay3, light3, normal, tangent);
+				IrisEntityVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color3, uv3.x, uv3.y, mid_u, mid_v, overlay3, light3, normal, tangent);
 				BUFFER_PTR += IrisEntityVertex.STRIDE;
 			}
 			BUFFED_VERTEX += 4;
@@ -231,7 +338,7 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 				// Pretend unshaded faces always point up to get the correct max diffuse value for the current level.
 				float3.set(0, 1, 0);
 				// Don't apply the normal matrix since that would cause upside down objects to be dark.
-				unshadedDiffuse = (int) (255 * ShadeSeparatingSuperByteBuffer.calculateDiffuse(float3, lightDir0, lightDir1));
+				unshadedDiffuse = (int) (255 * calculateDiffuse(float3, lightDir0, lightDir1));
 			}
 		}
 
@@ -285,20 +392,11 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 				uv3.set(template.u(i + 3), template.v(i + 3));
 			}
 
-			int quadColor = template.color(i);
 			int vertexColor = byteBuffer.getVertexColor();
-			int r = ((((quadColor) & 0xFF) * ((vertexColor) & 0xFF)) + 0xFF) >>> 8;
-			int g = ((((quadColor >>> 8) & 0xFF) * ((vertexColor >>> 8) & 0xFF)) + 0xFF) >>> 8;
-			int b = ((((quadColor >>> 16) & 0xFF) * ((vertexColor >>> 16) & 0xFF)) + 0xFF) >>> 8;
-			int a = ((((quadColor >>> 24) & 0xFF) * ((vertexColor >>> 24) & 0xFF)) + 0xFF) >>> 8;
-			if (applyDiffuse) {
-				float3.set(nx, ny, nz);
-				int factor = shaded ? (int) (255.0F * ShadeSeparatingSuperByteBuffer.calculateDiffuse(float3, lightDir0, lightDir1)) : unshadedDiffuse;
-				r = (r * factor + 255) >>> 8;
-				g = (g * factor + 255) >>> 8;
-				b = (b * factor + 255) >>> 8;
-			}
-			int color = (a << 24) | (b << 16) | (g << 8) | r;
+			int color0 = calcColorSodium(template.color(i), vertexColor, unshadedDiffuse, applyDiffuse, shaded, nx, ny, nz);
+			int color1 = calcColorSodium(template.color(i + 1), vertexColor, unshadedDiffuse, applyDiffuse, shaded, nx, ny, nz);
+			int color2 = calcColorSodium(template.color(i + 2), vertexColor, unshadedDiffuse, applyDiffuse, shaded, nx, ny, nz);
+			int color3 = calcColorSodium(template.color(i + 3), vertexColor, unshadedDiffuse, applyDiffuse, shaded, nx, ny, nz);
 
 			int light0 = template.light(i);
 			int light1 = template.light(i + 1);
@@ -324,16 +422,16 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 			}
 
 			if (format == BlockVertex.FORMAT) { // BlockVertex.FORMAT
-				BlockVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color, uv0.x, uv0.y, light0, normal);
+				BlockVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color0, uv0.x, uv0.y, light0, normal);
 				BUFFER_PTR += BlockVertex.STRIDE;
 
-				BlockVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color, uv1.x, uv1.y, light1, normal);
+				BlockVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color1, uv1.x, uv1.y, light1, normal);
 				BUFFER_PTR += BlockVertex.STRIDE;
 
-				BlockVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color, uv2.x, uv2.y, light2, normal);
+				BlockVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color2, uv2.x, uv2.y, light2, normal);
 				BUFFER_PTR += BlockVertex.STRIDE;
 
-				BlockVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color, uv3.x, uv3.y, light3, normal);
+				BlockVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color3, uv3.x, uv3.y, light3, normal);
 				BUFFER_PTR += BlockVertex.STRIDE;
 			} else { // EntityVertex.FORMAT
 				int overlay0, overlay1, overlay2, overlay3;
@@ -345,16 +443,16 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 					overlay2 = template.overlay(i + 2);
 					overlay3 = template.overlay(i + 3);
 				}
-				EntityVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color, uv0.x, uv0.y, overlay0, light0, normal);
+				EntityVertex.write(BUFFER_PTR, pos0.x, pos0.y, pos0.z, color0, uv0.x, uv0.y, overlay0, light0, normal);
 				BUFFER_PTR += EntityVertex.STRIDE;
 
-				EntityVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color, uv1.x, uv1.y, overlay1, light1, normal);
+				EntityVertex.write(BUFFER_PTR, pos1.x, pos1.y, pos1.z, color1, uv1.x, uv1.y, overlay1, light1, normal);
 				BUFFER_PTR += EntityVertex.STRIDE;
 
-				EntityVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color, uv2.x, uv2.y, overlay2, light2, normal);
+				EntityVertex.write(BUFFER_PTR, pos2.x, pos2.y, pos2.z, color2, uv2.x, uv2.y, overlay2, light2, normal);
 				BUFFER_PTR += EntityVertex.STRIDE;
 
-				EntityVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color, uv3.x, uv3.y, overlay3, light3, normal);
+				EntityVertex.write(BUFFER_PTR, pos3.x, pos3.y, pos3.z, color3, uv3.x, uv3.y, overlay3, light3, normal);
 				BUFFER_PTR += EntityVertex.STRIDE;
 			}
 
@@ -365,6 +463,11 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 		flush(writer, true, format);
 	}
 
+	boolean isShadowPass()
+	{
+		return ShadowRenderer.ACTIVE;
+	}
+
 	@Override
 	public boolean renderInto(ShadeSeparatingSuperByteBuffer byteBuffer, PoseStack input, VertexConsumer builder) {
 		VertexBufferWriter writer = VertexBufferWriter.tryOf(builder);
@@ -372,7 +475,11 @@ public class ForgeExternalRenderHelper implements ExternalRenderHelper {
 		if (builder instanceof BufferBuilder bb) {
 			VertexFormatDescription format = VertexFormatRegistry.instance().get(bb.format);
 			if (format == IrisTerrainVertex.FORMAT || format == IrisEntityVertex.FORMAT) {
-				IrisRenderInto(byteBuffer, input, writer, format);
+				if (!isShadowPass()) {
+					IrisRenderInto(byteBuffer, input, writer, format);
+				} else {
+					IrisRenderShadowInto(byteBuffer, input, writer, format);
+				}
 				return true;
 			} else if (format == BlockVertex.FORMAT || format == EntityVertex.FORMAT) {
 				SodiumRenderInto(byteBuffer, input, writer, format);
