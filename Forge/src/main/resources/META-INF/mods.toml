@@ -35,3 +35,17 @@ ${mod_description}
     versionRange="${flywheel_version_range}"
     ordering="AFTER"
     side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="oculus"
+    mandatory=true
+    versionRange="[1.8.0,)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="embeddium"
+    mandatory=true
+    versionRange="[0.3.31-beta.53,)"
+    ordering="NONE"
+    side="CLIENT"
